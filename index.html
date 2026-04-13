@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Padder: 4:5 to 9:16</title>
+    <title>Bulk Image Padder: 4:5 to 9:16</title>
+    <!-- Include JSZip library for creating zip files in the browser -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -83,29 +85,58 @@
             color: white;
             padding: 12px 24px;
             border-radius: 6px;
-            text-decoration: none;
+            border: none;
+            font-size: 16px;
             font-weight: 600;
             display: inline-block;
+            cursor: pointer;
             transition: background-color 0.2s;
         }
         .download-btn:hover {
             background-color: #059669;
         }
+        .download-btn:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+        #progressContainer {
+            display: none;
+            margin-top: 20px;
+            text-align: left;
+            background-color: #f3f4f6;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        #progressBar {
+            width: 100%;
+            height: 8px;
+            background-color: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        #progressFill {
+            height: 100%;
+            background-color: #3b82f6;
+            width: 0%;
+            transition: width 0.2s;
+        }
     </style>
 </head>
 <body>
 
-    <h1>Image Ratio Converter</h1>
-    <p>Upload a 4:5 image to convert it to 9:16 format with transparent padding.</p>
+    <h1>Bulk Image Ratio Converter</h1>
+    <p>Select a folder of 4:5 images. We'll automatically convert them all to 9:16 format and export them as a ZIP.</p>
 
     <div class="upload-container">
-        <label for="imageUpload" class="upload-btn">Choose Image</label>
-        <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/webp">
-        <div style="margin-top: 15px; font-size: 0.9em; color: #6b7280;" id="fileName">No file selected</div>
+        <label for="imageUpload" class="upload-btn">Choose Folder</label>
+        <!-- webkitdirectory allows folder selection -->
+        <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/webp" webkitdirectory directory multiple>
+        <div style="margin-top: 15px; font-size: 0.9em; color: #6b7280;" id="fileName">No folder selected</div>
     </div>
 
     <div class="controls-container" id="controlsContainer">
-        <h3>Adjust Scale</h3>
+        <h3>Adjust Scale (Applies to all)</h3>
         <p style="font-size: 0.85em; color: #6b7280; margin-bottom: 15px;">If the platform slightly crops the edges of your image, set the scale to ~92-98% to add a tiny bit of horizontal padding.</p>
         <div class="slider-wrapper">
             <label for="scaleSlider">Image Scale: <span id="scaleValue">91.1%</span></label>
@@ -118,10 +149,15 @@
     </div>
 
     <div class="preview-container" id="previewContainer">
-        <h3>Preview (9:16)</h3>
+        <h3>Preview (First Image)</h3>
         <img id="preview" alt="Padded image preview">
         <br>
-        <a id="downloadBtn" class="download-btn" download="padded_image.png">Download Padded Image</a>
+        <button id="downloadBtn" class="download-btn">Download All as ZIP</button>
+        
+        <div id="progressContainer">
+            <div style="font-size: 0.85em; color: #4b5563; font-weight: 600;" id="progressText">Processing...</div>
+            <div id="progressBar"><div id="progressFill"></div></div>
+        </div>
     </div>
 
     <canvas id="canvas" style="display: none;"></canvas>
@@ -139,85 +175,159 @@
         const scaleSlider = document.getElementById('scaleSlider');
         const scaleValue = document.getElementById('scaleValue');
         const paddingInfo = document.getElementById('paddingInfo');
+        
+        const progressContainer = document.getElementById('progressContainer');
+        const progressText = document.getElementById('progressText');
+        const progressFill = document.getElementById('progressFill');
 
-        let currentImage = null;
-        let originalFileName = '';
+        let currentFiles = [];
+        let previewImageObj = null;
 
         // Update canvas when slider changes
         scaleSlider.addEventListener('input', function() {
             scaleValue.textContent = this.value + '%';
-            if (currentImage) {
-                renderCanvas();
+            if (previewImageObj) {
+                renderPreviewCanvas();
             }
         });
 
         imageUpload.addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (!file) return;
+            // Filter to only include image files
+            currentFiles = Array.from(e.target.files).filter(file => file.type.startsWith('image/'));
+            
+            if (currentFiles.length === 0) {
+                fileNameDisplay.textContent = "No valid images found in the selected folder.";
+                return;
+            }
 
-            originalFileName = file.name;
-            fileNameDisplay.textContent = file.name;
+            fileNameDisplay.textContent = `Selected ${currentFiles.length} image(s) from folder`;
 
+            // Load the first image to use as the visual preview
             const reader = new FileReader();
             reader.onload = function(event) {
                 const img = new Image();
                 img.onload = function() {
-                    currentImage = img;
+                    previewImageObj = img;
                     controlsContainer.style.display = 'block';
                     previewContainer.style.display = 'block';
-                    renderCanvas();
+                    renderPreviewCanvas();
                 };
                 img.src = event.target.result;
             };
-            reader.readAsDataURL(file);
+            reader.readAsDataURL(currentFiles[0]);
         });
 
-        function renderCanvas() {
-            if (!currentImage) return;
+        // Renders just the single preview image in the UI
+        function renderPreviewCanvas() {
+            if (!previewImageObj) return;
+            const dataUrl = processImageToDataURL(previewImageObj, parseFloat(scaleSlider.value) / 100);
+            previewImg.src = dataUrl;
+        }
 
-            const originalWidth = currentImage.width;
-            const originalHeight = currentImage.height;
+        // Core processing function
+        function processImageToDataURL(img, scale) {
+            const originalWidth = img.width;
+            const originalHeight = img.height;
 
-            // Get scale percentage (e.g., 91.7% = 0.917)
-            const scale = parseFloat(scaleSlider.value) / 100;
-
-            // Calculate the total canvas width based on the scale.
-            // If scale is 100%, canvas width = original image width.
-            // If scale is 90%, canvas width is slightly larger, creating side padding.
             const canvasWidth = Math.round(originalWidth / scale);
-            
-            // Calculate height to strictly enforce 9:16 ratio
             const canvasHeight = Math.round(canvasWidth * (16 / 9));
 
-            // Set canvas dimensions
             canvas.width = canvasWidth;
             canvas.height = canvasHeight;
 
-            // Clear canvas (makes it completely transparent)
             ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-            // Calculate X and Y offsets to center the image
             const xOffset = Math.round((canvasWidth - originalWidth) / 2);
             const yOffset = Math.round((canvasHeight - originalHeight) / 2);
 
-            // Draw the original image onto the canvas at the centered position
-            ctx.drawImage(currentImage, xOffset, yOffset, originalWidth, originalHeight);
+            ctx.drawImage(img, xOffset, yOffset, originalWidth, originalHeight);
 
-            // Convert canvas to Data URL
-            const dataUrl = canvas.toDataURL('image/png');
-
-            // Update UI
-            previewImg.src = dataUrl;
-            downloadBtn.href = dataUrl;
-            
-            // Calculate and display exactly how much padding we have
-            const paddingPercentage = ((xOffset / canvasWidth) * 100).toFixed(1);
+            // Update UI padding info
+            const paddingPercentage = ((xOffset / canvasWidth) * 100).toFixed(2);
             paddingInfo.textContent = `Horizontal Padding: ${paddingPercentage}% (${xOffset}px) on each side`;
-            
-            // Generate a smart filename
-            const originalNameWithoutExt = originalFileName.split('.').slice(0, -1).join('.');
-            downloadBtn.download = (originalNameWithoutExt || 'image') + `_9x16_${scaleSlider.value}pct.png`;
+
+            return canvas.toDataURL('image/png');
         }
+
+        // Helper to load an image asynchronously
+        function loadImageAsync(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    const img = new Image();
+                    img.onload = () => resolve(img);
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // Bulk process and download ZIP
+        downloadBtn.addEventListener('click', async function() {
+            if (currentFiles.length === 0) return;
+            
+            downloadBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            
+            try {
+                const zip = new JSZip();
+                const scale = parseFloat(scaleSlider.value) / 100;
+                
+                for (let i = 0; i < currentFiles.length; i++) {
+                    const file = currentFiles[i];
+                    
+                    // Update progress UI
+                    const percent = Math.round((i / currentFiles.length) * 100);
+                    progressFill.style.width = percent + '%';
+                    progressText.textContent = `Processing image ${i + 1} of ${currentFiles.length}: ${file.name}`;
+                    
+                    // Allow UI to update
+                    await new Promise(r => setTimeout(r, 10));
+                    
+                    // Load and process
+                    const img = await loadImageAsync(file);
+                    const dataUrl = processImageToDataURL(img, scale);
+                    
+                    // Extract base64 data
+                    const base64Data = dataUrl.split(',')[1];
+                    
+                    // Add to zip
+                    const originalNameWithoutExt = file.name.split('.').slice(0, -1).join('.');
+                    const newName = (originalNameWithoutExt || `image_${i}`) + `_9x16_${scaleSlider.value}pct.png`;
+                    zip.file(newName, base64Data, {base64: true});
+                }
+                
+                progressFill.style.width = '100%';
+                progressText.textContent = "Compressing files into ZIP... (this might take a moment)";
+                await new Promise(r => setTimeout(r, 50)); // let UI update
+                
+                // Generate ZIP file
+                const zipContent = await zip.generateAsync({ type: "blob" });
+                
+                // Trigger download
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(zipContent);
+                link.download = `padded_images_${scaleSlider.value}pct.zip`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                progressText.textContent = "Download complete!";
+                
+            } catch (err) {
+                console.error("Error processing images:", err);
+                progressText.textContent = "An error occurred during processing.";
+            } finally {
+                downloadBtn.disabled = false;
+                setTimeout(() => {
+                    if(progressText.textContent === "Download complete!") {
+                        progressContainer.style.display = 'none';
+                    }
+                }, 4000);
+            }
+        });
     </script>
 </body>
 </html>
