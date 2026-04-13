@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Padder: 4:5 to 9:16</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background-color: #f9fafb;
+            color: #111827;
+            text-align: center;
+        }
+        h1 {
+            color: #1f2937;
+        }
+        p {
+            color: #4b5563;
+            margin-bottom: 30px;
+        }
+        .upload-container, .controls-container, .preview-container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        .upload-container {
+            border: 2px dashed #d1d5db;
+            transition: border-color 0.2s;
+        }
+        .upload-container:hover {
+            border-color: #3b82f6;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .upload-btn {
+            background-color: #3b82f6;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            display: inline-block;
+            transition: background-color 0.2s;
+        }
+        .upload-btn:hover {
+            background-color: #2563eb;
+        }
+        .controls-container {
+            display: none;
+        }
+        .slider-wrapper {
+            margin: 20px 0;
+        }
+        input[type="range"] {
+            width: 80%;
+            max-width: 400px;
+        }
+        .preview-container {
+            display: none;
+        }
+        #preview {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #e5e7eb;
+            background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), 
+                              linear-gradient(135deg, #ccc 25%, transparent 25%),
+                              linear-gradient(45deg, transparent 75%, #ccc 75%),
+                              linear-gradient(135deg, transparent 75%, #ccc 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 0, 10px -10px, 0px 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            max-height: 60vh;
+        }
+        .download-btn {
+            background-color: #10b981;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-block;
+            transition: background-color 0.2s;
+        }
+        .download-btn:hover {
+            background-color: #059669;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Image Ratio Converter</h1>
+    <p>Upload a 4:5 image to convert it to 9:16 format with transparent padding.</p>
+
+    <div class="upload-container">
+        <label for="imageUpload" class="upload-btn">Choose Image</label>
+        <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/webp">
+        <div style="margin-top: 15px; font-size: 0.9em; color: #6b7280;" id="fileName">No file selected</div>
+    </div>
+
+    <div class="controls-container" id="controlsContainer">
+        <h3>Adjust Scale</h3>
+        <p style="font-size: 0.85em; color: #6b7280; margin-bottom: 15px;">If the platform slightly crops the edges of your image, set the scale to ~92-98% to add a tiny bit of horizontal padding.</p>
+        <div class="slider-wrapper">
+            <label for="scaleSlider">Image Scale: <span id="scaleValue">91.1%</span></label>
+            <br><br>
+            <input type="range" id="scaleSlider" min="50" max="100" step="0.1" value="91.1">
+        </div>
+        <div id="paddingInfo" style="margin-top: 15px; font-weight: 500; color: #3b82f6;">
+            Horizontal Padding: 4.45% on each side
+        </div>
+    </div>
+
+    <div class="preview-container" id="previewContainer">
+        <h3>Preview (9:16)</h3>
+        <img id="preview" alt="Padded image preview">
+        <br>
+        <a id="downloadBtn" class="download-btn" download="padded_image.png">Download Padded Image</a>
+    </div>
+
+    <canvas id="canvas" style="display: none;"></canvas>
+
+    <script>
+        const imageUpload = document.getElementById('imageUpload');
+        const fileNameDisplay = document.getElementById('fileName');
+        const controlsContainer = document.getElementById('controlsContainer');
+        const previewContainer = document.getElementById('previewContainer');
+        const previewImg = document.getElementById('preview');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const scaleSlider = document.getElementById('scaleSlider');
+        const scaleValue = document.getElementById('scaleValue');
+        const paddingInfo = document.getElementById('paddingInfo');
+
+        let currentImage = null;
+        let originalFileName = '';
+
+        // Update canvas when slider changes
+        scaleSlider.addEventListener('input', function() {
+            scaleValue.textContent = this.value + '%';
+            if (currentImage) {
+                renderCanvas();
+            }
+        });
+
+        imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            originalFileName = file.name;
+            fileNameDisplay.textContent = file.name;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    currentImage = img;
+                    controlsContainer.style.display = 'block';
+                    previewContainer.style.display = 'block';
+                    renderCanvas();
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function renderCanvas() {
+            if (!currentImage) return;
+
+            const originalWidth = currentImage.width;
+            const originalHeight = currentImage.height;
+
+            // Get scale percentage (e.g., 91.7% = 0.917)
+            const scale = parseFloat(scaleSlider.value) / 100;
+
+            // Calculate the total canvas width based on the scale.
+            // If scale is 100%, canvas width = original image width.
+            // If scale is 90%, canvas width is slightly larger, creating side padding.
+            const canvasWidth = Math.round(originalWidth / scale);
+            
+            // Calculate height to strictly enforce 9:16 ratio
+            const canvasHeight = Math.round(canvasWidth * (16 / 9));
+
+            // Set canvas dimensions
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+
+            // Clear canvas (makes it completely transparent)
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            // Calculate X and Y offsets to center the image
+            const xOffset = Math.round((canvasWidth - originalWidth) / 2);
+            const yOffset = Math.round((canvasHeight - originalHeight) / 2);
+
+            // Draw the original image onto the canvas at the centered position
+            ctx.drawImage(currentImage, xOffset, yOffset, originalWidth, originalHeight);
+
+            // Convert canvas to Data URL
+            const dataUrl = canvas.toDataURL('image/png');
+
+            // Update UI
+            previewImg.src = dataUrl;
+            downloadBtn.href = dataUrl;
+            
+            // Calculate and display exactly how much padding we have
+            const paddingPercentage = ((xOffset / canvasWidth) * 100).toFixed(1);
+            paddingInfo.textContent = `Horizontal Padding: ${paddingPercentage}% (${xOffset}px) on each side`;
+            
+            // Generate a smart filename
+            const originalNameWithoutExt = originalFileName.split('.').slice(0, -1).join('.');
+            downloadBtn.download = (originalNameWithoutExt || 'image') + `_9x16_${scaleSlider.value}pct.png`;
+        }
+    </script>
+</body>
+</html>
